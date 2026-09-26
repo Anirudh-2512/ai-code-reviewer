@@ -308,6 +308,16 @@ export async function reviewWithGroq(input: {
   // Under the free tier's 8k TPM we can usually only complete 2-3 large parts
   // per request — so review the risky chunks first (secrets, SQL, auth, exec).
   chunks.sort((a, b) => chunkPriority(b) - chunkPriority(a));
+  console.error(
+    `[groq] ${chunks.length} chunks; score order: ` +
+      chunks
+        .slice(0, MAX_CHUNKS)
+        .map(
+          (c) =>
+            `${chunkPriority(c)}:${(c.match(/diff --git a\/(\S+)/)?.[1] ?? "?").slice(0, 40)}(${c.length})`
+        )
+        .join(", ")
+  );
   const finishedChars = chunks
     .slice(0, MAX_CHUNKS)
     .reduce((acc, c) => acc + c.length + 1, 0);
