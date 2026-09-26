@@ -207,6 +207,11 @@ async function reviewText(
         const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
         return normalize(parsed);
       } catch (err) {
+        const desc =
+          err instanceof Error ? err.message : String(err).slice(0, 120);
+        console.error(
+          `[groq] part attempt failed: ${desc.slice(0, 160)}`
+        );
         if (err instanceof SyntaxError || !(err instanceof Error)) {
           // JSON.parse / extractJson failure — retryable, stay on this model.
           lastError = err;
@@ -322,9 +327,10 @@ export async function reviewWithGroq(input: {
         )
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("DEADLINE_EXCEEDED")) {
-        notes.push(
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("DEADLINE_EXCEEDED")) {
+      console.error(`[groq] chunk ${i + 1}: deadline hit, stopping early`);
+      notes.push(
           ` Stopped early to return results within the server time limit; re-run later for the remaining parts.`
         );
         break;
