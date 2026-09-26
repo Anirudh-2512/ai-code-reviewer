@@ -37,6 +37,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Under the free tier's 8k TPM we can usually only complete 2-3 large parts
+// per request — so review the risky chunks first (secrets, SQL, auth, exec).
+function chunkPriority(chunk: string): number {
+  const signals: [RegExp, number][] = [
+    [/(\.env[:\s]|credential|secret|token|password|api_key|apikey)/i, 6],
+    [/(exec|spawn|eval\(|subprocess|shell|command)/i, 5],
+    [/(SELECT\s|INSERT\s|UPDATE\s|DELETE\s|DROP\s|execute\(|\.query\()/i, 4],
+    [/(auth|login|logout|session|jwt|cookie|permission|role|admin)/i, 4],
+    [/(\.sql|\.db|migration|schema)/i, 3],
+    [/\.md|README|CHANGELOG|package-lock/i, -3],
+    [/license/i, -4],
+  ];
+  let score = 0;
+  for (const [re, weight] of signals) if (re.test(chunk)) score += weight;
+  return score;
+}
+
 function chunkDiff(diff: string): string[] {
   const lines = diff.split("\n");
   const chunks: string[] = [];
@@ -276,6 +293,9 @@ export async function reviewWithGroq(input: {
   }
 
   const chunks = chunkDiff(input.diff);
+  // Under the free tier's 8k TPM we can usually only complete 2-3 large parts
+  // per request — so review the risky chunks first (secrets, SQL, auth, exec).
+  chunks.sort((a, b) => chunkPriority(b) - chunkPriority(a));
   const finishedChars = chunks
     .slice(0, MAX_CHUNKS)
     .reduce((acc, c) => acc + c.length + 1, 0);
