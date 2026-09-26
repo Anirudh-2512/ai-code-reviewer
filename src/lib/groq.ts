@@ -162,7 +162,14 @@ async function reviewText(
     } catch (err) {
       lastError = err;
       const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("model_not_found")) throw err;
+      // Try the next model on missing model OR rate limit (different models
+      // have independent TPM buckets on Groq).
+      if (
+        !message.includes("model_not_found") &&
+        !message.includes("rate_limit_exceeded")
+      ) {
+        throw err;
+      }
     }
   }
   throw lastError instanceof Error
