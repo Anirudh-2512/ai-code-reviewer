@@ -103,12 +103,12 @@ function getRateLimitResetMs(err: unknown): number {
   const resetTokens = get("x-ratelimit-reset-tokens");
   if (resetTokens) {
     const ms = Number(resetTokens);
-    if (Number.isFinite(ms) && ms > 0) return Math.min(ms + 1_000, 60_000);
+    if (Number.isFinite(ms) && ms > 0) return Math.min(ms + 1_000, 45_000);
   }
   const retryAfter = get("retry-after");
   if (retryAfter) {
     const sec = Number(retryAfter);
-    if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1_000, 60_000);
+    if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1_000, 45_000);
   }
   return 0;
 }
@@ -124,7 +124,7 @@ async function chat(
   deadline?: number
 ): Promise<string> {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     if (deadlineHit(deadline)) {
       throw new Error("DEADLINE_EXCEEDED");
     }
@@ -144,9 +144,9 @@ async function chat(
       const message = err instanceof Error ? err.message : String(err);
       const status = (err as { status?: number }).status;
       if (status === 429 || message.includes("rate_limit_exceeded")) {
-        if (attempt < 3) {
+        if (attempt < 2) {
           const wait =
-            getRateLimitResetMs(err) || 15_000 * attempt; // header-driven, else 15s then 30s
+            getRateLimitResetMs(err) || 15_000 * attempt; // header-driven, else 15s
           if (deadlineHit(Date.now() + wait)) {
             throw new Error("DEADLINE_EXCEEDED");
           }
@@ -253,7 +253,7 @@ export async function reviewWithGroq(input: {
 
   // Stay well under the 240s Vercel cap: finish what we can, return partial
   // results with a clear note instead of dying mid-request.
-  const deadline = Date.now() + 190_000;
+  const deadline = Date.now() + 170_000;
 
   if (input.diff.length <= SINGLE_SHOT_CHARS) {
     return reviewText(
