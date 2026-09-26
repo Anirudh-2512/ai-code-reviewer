@@ -140,7 +140,8 @@ async function chat(
   user: string,
   deadline?: number,
   systemPrompt: string = SYSTEM_PROMPT,
-  useJsonFormat: boolean = true
+  useJsonFormat: boolean = true,
+  temperature: number = 0.1
 ): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -150,7 +151,7 @@ async function chat(
     try {
       const completion = await groq.chat.completions.create({
         model,
-        temperature: 0.1,
+        temperature,
         ...(useJsonFormat
           ? { response_format: { type: "json_object" as const } }
           : {}),
@@ -185,13 +186,14 @@ async function reviewText(
   groq: Groq,
   user: string,
   deadline?: number,
-  systemPrompt: string = SYSTEM_PROMPT
+  systemPrompt: string = SYSTEM_PROMPT,
+  useJsonFormatAttempt0: boolean = true
 ): Promise<ReviewResult> {
   let lastError: unknown;
   for (const model of MODELS) {
     // Two attempts per model: JSON-mode generations occasionally fail
     // validation transiently; a retry usually produces valid output.
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       if (deadlineHit(deadline)) {
         throw new Error("DEADLINE_EXCEEDED");
       }
@@ -202,7 +204,8 @@ async function reviewText(
           user,
           deadline,
           systemPrompt,
-          attempt === 0
+          attempt === 0 && useJsonFormatAttempt0,
+          attempt === 0 ? 0.1 : 0.5
         );
         const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
         return normalize(parsed);
@@ -210,7 +213,7 @@ async function reviewText(
         const desc =
           err instanceof Error ? err.message : String(err).slice(0, 120);
         console.error(
-          `[groq] part attempt failed: ${desc.slice(0, 160)}`
+          `[groq] part attempt failed (model=${model}, attempt=${attempt}): ${desc.slice(0, 160)}`
         );
         if (err instanceof SyntaxError || !(err instanceof Error)) {
           // JSON.parse / extractJson failure — retryable, stay on this model.
@@ -327,10 +330,10 @@ export async function reviewWithGroq(input: {
         )
       );
     } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("DEADLINE_EXCEEDED")) {
-      console.error(`[groq] chunk ${i + 1}: deadline hit, stopping early`);
-      notes.push(
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("DEADLINE_EXCEEDED")) {
+        console.error(`[groq] chunk ${i + 1}: deadline hit, stopping early`);
+        notes.push(
           ` Stopped early to return results within the server time limit; re-run later for the remaining parts.`
         );
         break;
@@ -340,9 +343,15 @@ export async function reviewWithGroq(input: {
           ` Part ${i + 1} hit the free-tier rate limit; keep trying any time for a complete review.`
         );
       } else {
-        throw err;
+        // Even unexpected failures must not 500 the whole review — skip the
+        // part with a note so earlier results still count.
+        console.error(
+          `[groq] chunk ${i + 1}: skipped: ${message.slice(0, 160)}`
+        );
+        notes.push(
+          ` Part ${i + 1} could not be completed (${message.slice(0, 80)}); re-run it later.`
+        );
       }
-      break;
     }
   }
 
