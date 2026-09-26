@@ -159,7 +159,9 @@ async function chat(
         // Keep the model's hidden reasoning from eating the output budget
         // (produces empty final content and json_validate errors otherwise).
         reasoning_effort: "low",
-        max_tokens: 8_192,
+        // Reviews emit ~300-600 output tokens; a smaller cap avoids qwen's
+        // "Request too large ... on output tokens" tier error entirely.
+        max_tokens: 4_096,
         ...(useJsonFormat
           ? { response_format: { type: "json_object" as const } }
           : {}),
