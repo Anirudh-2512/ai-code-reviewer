@@ -243,11 +243,17 @@ export async function reviewWithGroq(input: {
     throw new Error("GROQ_API_KEY is missing. Set it in .env.local and Vercel.");
   }
 
-  const groq = new Groq({ apiKey });
+  // Hard-bound every model request so hung connections can't blow past the
+  // Vercel cap; SDK-internal retries off (our own retry logic handles it).
+  const groq = new Groq({
+    apiKey,
+    timeout: 40_000,
+    maxRetries: 0,
+  });
 
   // Stay well under the 240s Vercel cap: finish what we can, return partial
   // results with a clear note instead of dying mid-request.
-  const deadline = Date.now() + 200_000;
+  const deadline = Date.now() + 190_000;
 
   if (input.diff.length <= SINGLE_SHOT_CHARS) {
     return reviewText(
