@@ -43,9 +43,11 @@ export function ReviewStudio() {
     try {
       let merged: Payload | null = null;
       let resume = 0;
+      const maxPasses = 5;
+      let unfinished = false;
       // Auto-resume: large diffs are reviewed in allotments under the free
       // tier's token budget; keep fetching the remaining chunks and merge.
-      for (let pass = 0; (pass === 0 || resume > 0) && pass < 3; pass++) {
+      for (let pass = 0; (pass === 0 || resume > 0) && pass < maxPasses; pass++) {
         // One retry per pass: a fully rate-limited pass (503) usually clears
         // within a minute as the free-tier token window resets.
         for (let attempt = 0; ; attempt++) {
@@ -100,10 +102,13 @@ export function ReviewStudio() {
         }
         setPayload(merged);
         const next = data.review.resumeIndex;
-        if (next != null && pass < 2) {
+        if (next != null && pass < maxPasses - 1) {
           setStage(
-            `Reviewed — automatically reviewing the remaining parts (pass ${pass + 2}/3). Findings below update as each pass completes.`
+            `Reviewed — automatically reviewing the remaining parts (pass ${pass + 2}/${maxPasses}). Findings below update as each pass completes.`
           );
+        }
+        if (next != null && pass >= maxPasses - 1) {
+          unfinished = true;
         }
         resume = next != null ? next : 0;
         break;
@@ -112,10 +117,14 @@ export function ReviewStudio() {
       // Final pass done (or no more chunks): drop the resume marker so the
       // results read as complete, and clear the progress stage.
       if (merged) {
-        merged = { ...merged, review: { ...merged.review, resumeIndex: undefined } };
+        merged = { ...merged, review: { ...merged.review, resumeIndex: unfinished ? merged.review.resumeIndex : undefined } };
       }
       setPayload(merged);
-      setStage(null);
+      setStage(
+        unfinished
+          ? "Some parts remain unreviewed (free-tier limits) — press Run again to continue from where it stopped."
+          : null
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
     } finally {
@@ -203,7 +212,7 @@ export function ReviewStudio() {
           ) : null}
           <p className="font-ui text-xs text-[var(--muted)]" aria-live="polite">
             Large PRs are split into parts and rate-limited on Groq&apos;s free
-            tier — this can take 2–8 minutes total. Keeping the tab open is
+            tier — this can take 4–12 minutes total. Keeping the tab open is
             safe; results appear below as each part completes.
           </p>
         </>
