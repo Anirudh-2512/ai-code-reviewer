@@ -10,6 +10,8 @@ type Payload = {
   review: ReviewResult;
 };
 
+const VERDICT_RANK = { safe: 0, "needs-work": 1, blocked: 2 } as const;
+
 export function ReviewStudio() {
   const [prUrl, setPrUrl] = useState("");
   const [diff, setDiff] = useState("");
@@ -37,39 +39,74 @@ export function ReviewStudio() {
     setError(null);
     setPayload(null);
     try {
-      const res = await fetch("/api/review", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prUrl, diff }),
-      });
-      const raw = await res.text();
-      let data: {
-        error?: string;
-        source?: string;
-        title?: string;
-        review?: ReviewResult;
-      };
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        throw new Error(
-          res.status === 408 || res.status === 504
-            ? "Review timed out on the server. Try a smaller PR or paste a shorter diff."
-            : "The server returned an error page instead of a review. Try again — large PRs may need a smaller diff."
-        );
+      let merged: Payload | null = null;
+      let resume = 0;
+      // Auto-resume: large diffs are reviewed in allotments under the free
+      // tier's token budget; keep fetching the remaining chunks and merge.
+      for (let pass = 0; (pass === 0 || resume > 0) && pass < 3; pass++) {
+        const res = await fetch("/api/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prUrl, diff, resumeFrom: resume }),
+        });
+        const raw = await res.text();
+        let data: {
+          error?: string;
+          source?: string;
+          title?: string;
+          review?: ReviewResult;
+        };
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          throw new Error(
+            res.status === 408 || res.status === 504
+              ? "Review timed out on the server. Try a smaller PR or paste a shorter diff."
+              : "The server returned an error page instead of a review. Try again — large PRs may need a smaller diff."
+          );
+        }
+        if (!res.ok)
+          throw new Error(data.error || `Review failed (${res.status})`);
+        if (!data.review || !data.source)
+          throw new Error("Unexpected response from server.");
+        if (merged === null) {
+          merged = {
+            source: data.source,
+            title: data.title,
+            review: data.review,
+          };
+        } else {
+          const prev: Payload = { ...merged };
+          merged = {
+            source: prev.source,
+            title: data.title ?? prev.title,
+            review: mergeReviews(prev.review, data.review),
+          };
+        }
+        setPayload(merged);
+        const next = data.review.resumeIndex;
+        resume = next != null ? next : 0;
       }
-      if (!res.ok) throw new Error(data.error || `Review failed (${res.status})`);
-      if (!data.review || !data.source) throw new Error("Unexpected response from server.");
-      setPayload({
-        source: data.source,
-        title: data.title,
-        review: data.review,
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
     } finally {
       setLoading(false);
     }
+  }
+
+  function mergeReviews(prev: ReviewResult, next: ReviewResult): ReviewResult {
+    const seen = new Set(
+      prev.findings.map((f) => `${f.file ?? ""}:${f.line ?? ""}:${f.title}`)
+    );
+    return {
+      verdict:
+        VERDICT_RANK[next.verdict] > VERDICT_RANK[prev.verdict]
+          ? next.verdict
+          : prev.verdict,
+      findings: [...prev.findings, ...next.findings.filter((f) => !seen.has(`${f.file ?? ""}:${f.line ?? ""}:${f.title}`))],
+      summary: `${prev.summary.replace(/\s*\(Resumed from part \d+\)\s*/g, " ")} ${next.summary.replace(/\s*\(Resumed from part \d+\)\s*/g, " ")}`,
+      resumeIndex: next.resumeIndex,
+    };
   }
 
   return (

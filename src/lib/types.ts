@@ -16,4 +16,6 @@ export type ReviewResult = {
   summary: string;
   verdict: "safe" | "needs-work" | "blocked";
   findings: ReviewFinding[];
+  /** Index of the chunk to resume from when a large diff was only partially reviewed (absent when complete). */
+  resumeIndex?: number;
 };

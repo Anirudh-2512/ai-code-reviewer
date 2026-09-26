@@ -278,6 +278,8 @@ export async function reviewWithGroq(input: {
   title?: string;
   body?: string;
   diff: string;
+  /** 0-based chunk index to start from (resume of a partially-reviewed diff). */
+  resumeFrom?: number;
 }): Promise<ReviewResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -326,12 +328,19 @@ export async function reviewWithGroq(input: {
 
   const results: ReviewResult[] = [];
   const count = Math.min(chunks.length, MAX_CHUNKS);
+  const start = Math.max(
+    0,
+    Math.min(Math.floor(input.resumeFrom ?? 0), count - 1)
+  );
+  const totalForClient = count;
   const notes: string[] = [];
-  for (let i = 0; i < count; i++) {
-    if (i > 0 && Date.now() + MIN_PART_RESERVE > deadline) {
+  const failedIndexes: number[] = [];
+  for (let i = start; i < count; i++) {
+    if (i > start && Date.now() + MIN_PART_RESERVE > deadline) {
       notes.push(
-        ` Parts ${i + 1}-${count} were skipped to stay within the server time limit. Review these parts again from a fresh run.`
+        ` Parts ${i + 1}-${count} were skipped to stay within the server time limit.`
       );
+      failedIndexes.push(i);
       break;
     }
     try {
@@ -348,14 +357,16 @@ export async function reviewWithGroq(input: {
       if (message.includes("DEADLINE_EXCEEDED")) {
         console.error(`[groq] chunk ${i + 1}: deadline hit, stopping early`);
         notes.push(
-          ` Stopped early to return results within the server time limit; re-run later for the remaining parts.`
+          ` Stopped early to return results within the server time limit.`
         );
+        failedIndexes.push(i);
         break;
       }
       if (message.includes("rate_limit_exceeded") || message.includes("429")) {
         notes.push(
-          ` Part ${i + 1} hit the free-tier rate limit; keep trying any time for a complete review.`
+          ` Part ${i + 1} hit the free-tier rate limit; continuing with the next part.`
         );
+        failedIndexes.push(i);
       } else {
         // Even unexpected failures must not 500 the whole review — skip the
         // part with a note so earlier results still count.
@@ -363,8 +374,9 @@ export async function reviewWithGroq(input: {
           `[groq] chunk ${i + 1}: skipped: ${message.slice(0, 160)}`
         );
         notes.push(
-          ` Part ${i + 1} could not be completed (${message.slice(0, 80)}); re-run it later.`
+          ` Part ${i + 1} could not be completed (${message.slice(0, 80)}).`
         );
+        failedIndexes.push(i);
       }
     }
   }
@@ -384,16 +396,27 @@ export async function reviewWithGroq(input: {
 
   const findings: ReviewFinding[] = results.flatMap((r) => r.findings);
 
+  const resumed = start > 0;
   let summary = results
     .map((r, i) => (count > 1 ? `Part ${i + 1}: ${r.summary}` : r.summary))
     .join(" ");
-  if (count > 1 && results.length < count) {
-    summary += ` [Partial review: ${results.length}/${count} parts completed.]`;
+  if (count > 1 && results.length < totalForClient) {
+    summary += ` [Partial review: ${results.length}/${totalForClient} parts completed.]`;
   }
   summary += notes.join(" ");
   if (truncated) {
     summary += " [Note: diff too large — later portions were not reviewed to stay within the free-tier token limit.]";
   }
+  if (resumed) {
+    summary = ` (Resumed from part ${start + 1}) ` + summary;
+  }
 
-  return { summary, verdict: worst, findings };
+  // Tell the client where to resume the chunks-sized portion (skipping only
+  // ever happens among reviewed chunks — truncated tail is a separate note).
+  const out: ReviewResult = { summary, verdict: worst, findings };
+  if (results.length < totalForClient && failedIndexes.length > 0) {
+    out.resumeIndex = Math.min(...failedIndexes);
+  }
+
+  return out;
 }

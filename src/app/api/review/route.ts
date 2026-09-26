@@ -9,7 +9,11 @@ export const maxDuration = 240;
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { prUrl?: string; diff?: string };
+    const body = (await req.json()) as {
+      prUrl?: string;
+      diff?: string;
+      resumeFrom?: number;
+    };
     const prUrl = body.prUrl?.trim();
     const pasted = body.diff?.trim();
 
@@ -51,6 +55,10 @@ export async function POST(req: Request) {
       title,
       body: description,
       diff,
+      resumeFrom:
+        typeof body.resumeFrom === "number" && Number.isFinite(body.resumeFrom)
+          ? body.resumeFrom
+          : 0,
     });
 
     return NextResponse.json({ source, title, review });
