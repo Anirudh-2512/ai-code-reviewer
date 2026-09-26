@@ -41,7 +41,7 @@ function sleep(ms: number): Promise<void> {
 // per request — so review the risky chunks first (secrets, SQL, auth, exec).
 function chunkPriority(chunk: string): number {
   const signals: [RegExp, number][] = [
-    [/(\.env[:\s]|credential|secret|token|password|api_key|apikey)/i, 6],
+    [/(\.env|credential|secret|token|password|api_key|apikey)/i, 6],
     [/(exec|spawn|eval\(|subprocess|shell|command)/i, 5],
     [/(SELECT\s|INSERT\s|UPDATE\s|DELETE\s|DROP\s|execute\(|\.query\()/i, 4],
     [/(auth|login|logout|session|jwt|cookie|permission|role|admin)/i, 4],
