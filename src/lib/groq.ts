@@ -122,7 +122,8 @@ async function chat(
   model: string,
   user: string,
   deadline?: number,
-  systemPrompt: string = SYSTEM_PROMPT
+  systemPrompt: string = SYSTEM_PROMPT,
+  useJsonFormat: boolean = true
 ): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -133,7 +134,9 @@ async function chat(
       const completion = await groq.chat.completions.create({
         model,
         temperature: 0.1,
-        response_format: { type: "json_object" },
+        ...(useJsonFormat
+          ? { response_format: { type: "json_object" as const } }
+          : {}),
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: user },
@@ -176,7 +179,14 @@ async function reviewText(
         throw new Error("DEADLINE_EXCEEDED");
       }
       try {
-        const raw = await chat(groq, model, user, deadline, systemPrompt);
+        const raw = await chat(
+          groq,
+          model,
+          user,
+          deadline,
+          systemPrompt,
+          attempt === 0
+        );
         const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
         return normalize(parsed);
       } catch (err) {
