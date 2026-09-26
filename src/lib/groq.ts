@@ -152,6 +152,10 @@ async function chat(
       const completion = await groq.chat.completions.create({
         model,
         temperature,
+        // Keep the model's hidden reasoning from eating the output budget
+        // (produces empty final content and json_validate errors otherwise).
+        reasoning_effort: "low",
+        max_tokens: 8_192,
         ...(useJsonFormat
           ? { response_format: { type: "json_object" as const } }
           : {}),
