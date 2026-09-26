@@ -202,8 +202,7 @@ For multi-chunk (large) diffs the final verdict is the worst among all chunks.
 4. Deploy.
 
 Notes:
-- Route handlers run with `runtime = "nodejs"` and `maxDuration = 60`.
-- Vercel's free tier caps function execution at ~60s, so very large multi-chunk PR reviews may time out; normal-size PRs and pasted diffs finish well within the window.
+- Route handlers run with `runtime = "nodejs"` and `maxDuration = 240` (Fluid compute Hobby tier), giving large multi-chunk reviews headroom; the client degrades gracefully with a clear message if a review still times out.
 
 ---
 
