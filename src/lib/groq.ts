@@ -1,0 +1,219 @@
+import Groq from "groq-sdk";
+import { SYSTEM_PROMPT } from "./prompt";
+import type { ReviewFinding, ReviewResult } from "./types";
+
+const MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+
+// Free-tier Groq ("on_demand") enforces ~8000 tokens-per-minute for these models.
+// We size requests so each single call fits the budget, and split larger diffs
+// into chunks that are reviewed sequentially and then merged.
+const CHARS_PER_TOKEN = 4;
+const TPM_BUDGET = 8_000;
+const PROMPT_TOKENS = Math.ceil(SYSTEM_PROMPT.length / CHARS_PER_TOKEN) + 400;
+const OUTPUT_RESERVE_TOKENS = 1_200;
+
+const SINGLE_SHOT_CHARS = Math.floor(
+  (TPM_BUDGET - PROMPT_TOKENS - OUTPUT_RESERVE_TOKENS) * CHARS_PER_TOKEN
+);
+const MAX_CHUNK_CHARS = 15_000;
+const MAX_CHUNKS = 6;
+
+const VERDICT_RANK: Record<ReviewResult["verdict"], number> = {
+  safe: 0,
+  "needs-work": 1,
+  blocked: 2,
+};
+
+function extractJson(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) return text.slice(start, end + 1);
+  return text;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function chunkDiff(diff: string): string[] {
+  const lines = diff.split("\n");
+  const chunks: string[] = [];
+  let cur: string[] = [];
+  let size = 0;
+
+  const flush = () => {
+    if (cur.length) {
+      chunks.push(cur.join("\n"));
+      cur = [];
+      size = 0;
+    }
+  };
+
+  for (const line of lines) {
+    const len = line.length + 1;
+    if (line.startsWith("@@") && size + len > MAX_CHUNK_CHARS / 2) {
+      flush();
+    }
+    if (size + len > MAX_CHUNK_CHARS) {
+      flush();
+      if (len > MAX_CHUNK_CHARS) {
+        for (let i = 0; i < line.length; i += MAX_CHUNK_CHARS) {
+          chunks.push(line.slice(i, i + MAX_CHUNK_CHARS));
+        }
+        continue;
+      }
+    }
+    cur.push(line);
+    size += len;
+  }
+  flush();
+
+  return chunks;
+}
+
+function normalize(parsed: Partial<ReviewResult>): ReviewResult {
+  const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
+  return {
+    summary: parsed.summary || "Review completed.",
+    verdict:
+      parsed.verdict === "safe" || parsed.verdict === "blocked"
+        ? parsed.verdict
+        : "needs-work",
+    findings,
+  };
+}
+
+async function chat(
+  groq: Groq,
+  model: string,
+  user: string
+): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: user },
+        ],
+      });
+      return completion.choices[0]?.message?.content ?? "{}";
+    } catch (err) {
+      lastError = err;
+      const message = err instanceof Error ? err.message : String(err);
+      const status = (err as { status?: number }).status;
+      if (status === 429 || message.includes("rate_limit_exceeded")) {
+        // TPM window reset — wait longer than the sliding window, then retry.
+        if (attempt < 3) {
+          await sleep(50_000 * attempt);
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Groq call failed.");
+}
+
+async function reviewText(
+  groq: Groq,
+  user: string
+): Promise<ReviewResult> {
+  let lastError: unknown;
+  for (const model of MODELS) {
+    try {
+      const raw = await chat(groq, model, user);
+      const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
+      return normalize(parsed);
+    } catch (err) {
+      lastError = err;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("model_not_found")) throw err;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Groq review failed.");
+}
+
+function buildUserMessage(
+  parts: { title?: string; body?: string },
+  diffText: string,
+  chunkIndex: number,
+  chunkCount: number
+): string {
+  const header = [
+    parts.title ? `PR title: ${parts.title}` : null,
+    parts.body ? `PR description:\n${parts.body}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const chunkNote =
+    chunkCount > 1
+      ? `This is chunk ${chunkIndex}/${chunkCount} of a large diff. Only report issues visible in this chunk; files outside it are reviewed separately.`
+      : null;
+
+  return [
+    header || null,
+    chunkNote,
+    "Diff:\n```diff\n" + diffText + "\n```",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export async function reviewWithGroq(input: {
+  title?: string;
+  body?: string;
+  diff: string;
+}): Promise<ReviewResult> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY is missing. Set it in .env.local and Vercel.");
+  }
+
+  const groq = new Groq({ apiKey });
+
+  if (input.diff.length <= SINGLE_SHOT_CHARS) {
+    return reviewText(
+      groq,
+      buildUserMessage(input, input.diff, 1, 1)
+    );
+  }
+
+  const chunks = chunkDiff(input.diff);
+  const finishedChars = chunks
+    .slice(0, MAX_CHUNKS)
+    .reduce((acc, c) => acc + c.length + 1, 0);
+  const truncated = finishedChars < input.diff.length;
+
+  const results: ReviewResult[] = [];
+  const count = Math.min(chunks.length, MAX_CHUNKS);
+  for (let i = 0; i < count; i++) {
+    results.push(
+      await reviewText(
+        groq,
+        buildUserMessage(input, chunks[i], i + 1, count)
+      )
+    );
+  }
+
+  const worst = results.reduce<ReviewResult["verdict"]>(
+    (acc, r) => (VERDICT_RANK[r.verdict] > VERDICT_RANK[acc] ? r.verdict : acc),
+    "safe"
+  );
+
+  const findings: ReviewFinding[] = results.flatMap((r) => r.findings);
+
+  const summary = results
+    .map((r, i) => (count > 1 ? `Part ${i + 1}: ${r.summary}` : r.summary))
+    .join(" ") + (truncated ? " [Note: diff too large — later portions were not reviewed to stay within the free-tier token limit.]" : "");
+
+  return { summary, verdict: worst, findings };
+}

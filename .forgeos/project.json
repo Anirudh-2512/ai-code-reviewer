@@ -1,0 +1,13 @@
+﻿{
+  "name": "Sentinel",
+  "type": "web-app",
+  "framework": "nextjs-16",
+  "backend": "nextjs-route-handlers",
+  "database": null,
+  "apis": ["groq", "github-rest"],
+  "auth": null,
+  "payments": null,
+  "deployment": "vercel",
+  "state": "react-usestate",
+  "forgeosVersion": "1.1.0"
+}

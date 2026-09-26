@@ -1,0 +1,37 @@
+﻿{
+  "theme": "dark-cinematic",
+  "visualDirection": "3D security(command deck, starfield, morphing core orb, grain vignette)",
+  "visualLevel": 3,
+  "motionLevel": 2,
+  "brandTemperament": {
+    "source": "inferred",
+    "confidence": "high",
+    "traits": [
+      { "name": "authoritative", "intensity": 0.8 },
+      { "name": "precise", "intensity": 0.9 },
+      { "name": "futuristic", "intensity": 0.7 }
+    ]
+  },
+  "typography": {
+    "display": "Cormorant Garamond (next/font)",
+    "ui": "IBM Plex Sans (next/font)",
+    "mono": "system font-mono for diffs/code fixes"
+  },
+  "colors": {
+    "bg": "#05060a",
+    "gold": "#e8c07a",
+    "ice": "#9bd4ff",
+    "danger": "#ff5d73",
+    "ok": "#6ee7b7",
+    "muted": "#a8b3cc"
+  },
+  "layout": "hero 70vh + studio form max-w-3xl + results cards",
+  "threeD": true,
+  "webgl": true,
+  "video": false,
+  "storytelling": false,
+  "shaders": false,
+  "dataVisualization": "severity badges + verdict + file/line attributions",
+  "performancePriority": "medium",
+  "notes": "3D is presentation-only; functional studio form stays clean/fast. Model fallback chain implemented because llama-3.3-70b-versatile retired (2026); uses openai/gpt-oss-120b then 20b."
+}
