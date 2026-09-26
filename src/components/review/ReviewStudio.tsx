@@ -42,9 +42,29 @@ export function ReviewStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prUrl, diff }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Review failed");
-      setPayload(data);
+      const raw = await res.text();
+      let data: {
+        error?: string;
+        source?: string;
+        title?: string;
+        review?: ReviewResult;
+      };
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(
+          res.status === 408 || res.status === 504
+            ? "Review timed out on the server. Try a smaller PR or paste a shorter diff."
+            : "The server returned an error page instead of a review. Try again — large PRs may need a smaller diff."
+        );
+      }
+      if (!res.ok) throw new Error(data.error || `Review failed (${res.status})`);
+      if (!data.review || !data.source) throw new Error("Unexpected response from server.");
+      setPayload({
+        source: data.source,
+        title: data.title,
+        review: data.review,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
     } finally {

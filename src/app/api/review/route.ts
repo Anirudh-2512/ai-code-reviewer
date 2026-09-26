@@ -4,7 +4,8 @@ import { reviewWithGroq } from "@/lib/groq";
 import { parseGithubPrUrl } from "@/lib/parse-pr-url";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Fluid-compute Hobby allows up to 300s; large chunked reviews need headroom.
+export const maxDuration = 240;
 
 export async function POST(req: Request) {
   try {
