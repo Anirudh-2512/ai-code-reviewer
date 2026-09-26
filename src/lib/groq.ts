@@ -107,6 +107,14 @@ function normalize(parsed: Partial<ReviewResult>): ReviewResult {
 }
 
 function getRateLimitResetMs(err: unknown): number {
+  // Groq 429 bodies can carry an explicit cooldown ("try again in 10m16.032s")
+  // for both TPM and daily (TPD) windows — prefer it over header estimates.
+  const message = err instanceof Error ? err.message : String(err);
+  const bodyMatch = message.match(/try again in\s*(\d+)m(\d+(?:\.\d+)?)s/);
+  if (bodyMatch) {
+    const ms = Number(bodyMatch[1]) * 60_000 + Number(bodyMatch[2]) * 1000;
+    if (Number.isFinite(ms) && ms > 0) return Math.min(ms + 5_000, 100_000);
+  }
   const headers = (err as {
     headers?: Record<string, string | undefined> | Headers;
   }).headers;
@@ -177,8 +185,10 @@ async function chat(
       const status = (err as { status?: number }).status;
       if (status === 429 || message.includes("rate_limit_exceeded")) {
         if (attempt < 2) {
-          const wait =
-            getRateLimitResetMs(err) || 15_000 * attempt; // header-driven, else 15s
+          const wait = Math.min(
+            Math.max(getRateLimitResetMs(err), 15_000 * attempt),
+            45_000 // never waste the whole deadline waiting out a TPD window
+          );
           if (deadlineHit(Date.now() + wait)) {
             throw new Error("DEADLINE_EXCEEDED");
           }
