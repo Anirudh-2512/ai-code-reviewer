@@ -64,6 +64,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ source, title, review });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Review failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // 503 tells the client this is transient (free-tier rate limit) and
+    // retrying the same request after a short wait usually succeeds.
+    const status = message.includes("Groq review failed") ? 503 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

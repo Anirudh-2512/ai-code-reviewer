@@ -46,31 +46,44 @@ export function ReviewStudio() {
       // Auto-resume: large diffs are reviewed in allotments under the free
       // tier's token budget; keep fetching the remaining chunks and merge.
       for (let pass = 0; (pass === 0 || resume > 0) && pass < 3; pass++) {
-        const res = await fetch("/api/review", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prUrl, diff, resumeFrom: resume }),
-        });
-        const raw = await res.text();
-        let data: {
-          error?: string;
-          source?: string;
-          title?: string;
-          review?: ReviewResult;
-        };
-        try {
-          data = JSON.parse(raw);
-        } catch {
-          throw new Error(
-            res.status === 408 || res.status === 504
-              ? "Review timed out on the server. Try a smaller PR or paste a shorter diff."
-              : "The server returned an error page instead of a review. Try again — large PRs may need a smaller diff."
-          );
-        }
-        if (!res.ok)
-          throw new Error(data.error || `Review failed (${res.status})`);
-        if (!data.review || !data.source)
-          throw new Error("Unexpected response from server.");
+        // One retry per pass: a fully rate-limited pass (503) usually clears
+        // within a minute as the free-tier token window resets.
+        for (let attempt = 0; ; attempt++) {
+          const res = await fetch("/api/review", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prUrl, diff, resumeFrom: resume }),
+          });
+          const raw = await res.text();
+          let data: {
+            error?: string;
+            source?: string;
+            title?: string;
+            review?: ReviewResult;
+          };
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            throw new Error(
+              res.status === 408 || res.status === 504
+                ? "Review timed out on the server. Try a smaller PR or paste a shorter diff."
+                : "The server returned an error page instead of a review. Try again — large PRs may need a smaller diff."
+            );
+          }
+          if (!res.ok) {
+            if (res.status === 503 && attempt === 0) {
+              setStage(
+                `Rate limited by the free tier — waiting 45s, then retrying the remaining parts…`
+              );
+              await new Promise((r) => setTimeout(r, 45_000));
+              continue;
+            }
+            throw new Error(
+              data.error || `Review failed (${res.status})`
+            );
+          }
+          if (!data.review || !data.source)
+            throw new Error("Unexpected response from server.");
         if (merged === null) {
           merged = {
             source: data.source,
@@ -93,6 +106,8 @@ export function ReviewStudio() {
           );
         }
         resume = next != null ? next : 0;
+        break;
+        }
       }
       setStage(null);
     } catch (err) {
