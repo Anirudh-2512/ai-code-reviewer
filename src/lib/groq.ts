@@ -113,13 +113,21 @@ function getRateLimitResetMs(err: unknown): number {
   return 0;
 }
 
+function deadlineHit(deadline?: number): boolean {
+  return deadline !== undefined && Date.now() > deadline;
+}
+
 async function chat(
   groq: Groq,
   model: string,
-  user: string
+  user: string,
+  deadline?: number
 ): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (deadlineHit(deadline)) {
+      throw new Error("DEADLINE_EXCEEDED");
+    }
     try {
       const completion = await groq.chat.completions.create({
         model,
@@ -139,6 +147,9 @@ async function chat(
         if (attempt < 3) {
           const wait =
             getRateLimitResetMs(err) || 15_000 * attempt; // header-driven, else 15s then 30s
+          if (deadlineHit(Date.now() + wait)) {
+            throw new Error("DEADLINE_EXCEEDED");
+          }
           await sleep(wait);
           continue;
         }
@@ -151,15 +162,19 @@ async function chat(
 
 async function reviewText(
   groq: Groq,
-  user: string
+  user: string,
+  deadline?: number
 ): Promise<ReviewResult> {
   let lastError: unknown;
   for (const model of MODELS) {
     // Two attempts per model: JSON-mode generations occasionally fail
     // validation transiently; a retry usually produces valid output.
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (deadlineHit(deadline)) {
+        throw new Error("DEADLINE_EXCEEDED");
+      }
       try {
-        const raw = await chat(groq, model, user);
+        const raw = await chat(groq, model, user, deadline);
         const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
         return normalize(parsed);
       } catch (err) {
@@ -230,10 +245,15 @@ export async function reviewWithGroq(input: {
 
   const groq = new Groq({ apiKey });
 
+  // Stay well under the 240s Vercel cap: finish what we can, return partial
+  // results with a clear note instead of dying mid-request.
+  const deadline = Date.now() + 200_000;
+
   if (input.diff.length <= SINGLE_SHOT_CHARS) {
     return reviewText(
       groq,
-      buildUserMessage(input, input.diff, 1, 1)
+      buildUserMessage(input, input.diff, 1, 1),
+      deadline
     );
   }
 
@@ -242,10 +262,6 @@ export async function reviewWithGroq(input: {
     .slice(0, MAX_CHUNKS)
     .reduce((acc, c) => acc + c.length + 1, 0);
   const truncated = finishedChars < input.diff.length;
-
-  // Stay well under the 240s Vercel cap: finish what we can, return partial
-  // results with a clear note instead of dying mid-request.
-  const deadline = Date.now() + 200_000;
   const MIN_PART_RESERVE = 35_000;
 
   const results: ReviewResult[] = [];
@@ -262,11 +278,18 @@ export async function reviewWithGroq(input: {
       results.push(
         await reviewText(
           groq,
-          buildUserMessage(input, chunks[i], i + 1, count)
+          buildUserMessage(input, chunks[i], i + 1, count),
+          deadline
         )
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("DEADLINE_EXCEEDED")) {
+        notes.push(
+          ` Stopped early to return results within the server time limit; re-run later for the remaining parts.`
+        );
+        break;
+      }
       if (message.includes("rate_limit_exceeded") || message.includes("429")) {
         notes.push(
           ` Part ${i + 1} hit the free-tier rate limit; keep trying any time for a complete review.`
