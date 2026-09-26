@@ -85,6 +85,34 @@ function normalize(parsed: Partial<ReviewResult>): ReviewResult {
   };
 }
 
+function getRateLimitResetMs(err: unknown): number {
+  const headers = (err as {
+    headers?: Record<string, string | undefined> | Headers;
+  }).headers;
+  if (!headers) return 0;
+  const get = (k: string): string | undefined => {
+    if (typeof headers === "object" && !("get" in headers)) {
+      return headers[k.toLowerCase()] ?? headers[k];
+    }
+    try {
+      return (headers as Headers).get(k) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const resetTokens = get("x-ratelimit-reset-tokens");
+  if (resetTokens) {
+    const ms = Number(resetTokens);
+    if (Number.isFinite(ms) && ms > 0) return Math.min(ms + 1_000, 60_000);
+  }
+  const retryAfter = get("retry-after");
+  if (retryAfter) {
+    const sec = Number(retryAfter);
+    if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1_000, 60_000);
+  }
+  return 0;
+}
+
 async function chat(
   groq: Groq,
   model: string,
@@ -108,9 +136,10 @@ async function chat(
       const message = err instanceof Error ? err.message : String(err);
       const status = (err as { status?: number }).status;
       if (status === 429 || message.includes("rate_limit_exceeded")) {
-        // TPM window reset — wait longer than the sliding window, then retry.
         if (attempt < 3) {
-          await sleep(50_000 * attempt);
+          const wait =
+            getRateLimitResetMs(err) || 15_000 * attempt; // header-driven, else 15s then 30s
+          await sleep(wait);
           continue;
         }
       }
@@ -193,14 +222,46 @@ export async function reviewWithGroq(input: {
     .reduce((acc, c) => acc + c.length + 1, 0);
   const truncated = finishedChars < input.diff.length;
 
+  // Stay well under the 240s Vercel cap: finish what we can, return partial
+  // results with a clear note instead of dying mid-request.
+  const deadline = Date.now() + 200_000;
+  const MIN_PART_RESERVE = 35_000;
+
   const results: ReviewResult[] = [];
   const count = Math.min(chunks.length, MAX_CHUNKS);
+  const notes: string[] = [];
   for (let i = 0; i < count; i++) {
-    results.push(
-      await reviewText(
-        groq,
-        buildUserMessage(input, chunks[i], i + 1, count)
-      )
+    if (i > 0 && Date.now() + MIN_PART_RESERVE > deadline) {
+      notes.push(
+        ` Parts ${i + 1}-${count} were skipped to stay within the server time limit. Review these parts again from a fresh run.`
+      );
+      break;
+    }
+    try {
+      results.push(
+        await reviewText(
+          groq,
+          buildUserMessage(input, chunks[i], i + 1, count)
+        )
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("rate_limit_exceeded") || message.includes("429")) {
+        notes.push(
+          ` Part ${i + 1} hit the free-tier rate limit; keep trying any time for a complete review.`
+        );
+      } else {
+        throw err;
+      }
+      break;
+    }
+  }
+
+  if (results.length === 0) {
+    throw new Error(
+      "Groq review failed. " +
+        (notes.join(" ") ||
+          "The free tier is rate-limiting this account; try again in a minute.")
     );
   }
 
@@ -211,9 +272,16 @@ export async function reviewWithGroq(input: {
 
   const findings: ReviewFinding[] = results.flatMap((r) => r.findings);
 
-  const summary = results
+  let summary = results
     .map((r, i) => (count > 1 ? `Part ${i + 1}: ${r.summary}` : r.summary))
-    .join(" ") + (truncated ? " [Note: diff too large — later portions were not reviewed to stay within the free-tier token limit.]" : "");
+    .join(" ");
+  if (count > 1 && results.length < count) {
+    summary += ` [Partial review: ${results.length}/${count} parts completed.]`;
+  }
+  summary += notes.join(" ");
+  if (truncated) {
+    summary += " [Note: diff too large — later portions were not reviewed to stay within the free-tier token limit.]";
+  }
 
   return { summary, verdict: worst, findings };
 }
