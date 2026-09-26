@@ -286,6 +286,8 @@ export async function reviewWithGroq(input: {
   diff: string;
   /** 0-based chunk index to start from (resume of a partially-reviewed diff). */
   resumeFrom?: number;
+  /** Chunk indexes already reviewed in earlier client passes — never re-reviewed. */
+  skipIndexes?: number[];
 }): Promise<ReviewResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -333,15 +335,25 @@ export async function reviewWithGroq(input: {
   const MIN_PART_RESERVE = 35_000;
 
   const results: ReviewResult[] = [];
+  const reviewedIndexes: number[] = [];
   const count = Math.min(chunks.length, MAX_CHUNKS);
-  const start = Math.max(
-    0,
-    Math.min(Math.floor(input.resumeFrom ?? 0), count - 1)
+  const skipSet = new Set(
+    Array.isArray(input.skipIndexes)
+      ? input.skipIndexes
+          .filter((n) => Number.isInteger(n) && n >= 0 && n < count)
+          .slice(0, MAX_CHUNKS)
+      : []
+  );
+  // Earliest chunk not yet covered by a previous pass (0 for a fresh run).
+  const start = Math.min(
+    Math.max(0, Math.floor(input.resumeFrom ?? 0)),
+    count - 1
   );
   const totalForClient = count;
   const notes: string[] = [];
   const failedIndexes: number[] = [];
-  for (let i = start; i < count; i++) {
+  for (let i = 0; i < count; i++) {
+    if (skipSet.has(i)) continue;
     if (i > start && Date.now() + MIN_PART_RESERVE > deadline) {
       notes.push(
         ` Parts ${i + 1}-${count} were skipped to stay within the server time limit.`
@@ -358,6 +370,7 @@ export async function reviewWithGroq(input: {
           COMPACT_PROMPT
         )
       );
+      reviewedIndexes.push(i);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("DEADLINE_EXCEEDED")) {
@@ -402,29 +415,34 @@ export async function reviewWithGroq(input: {
 
   const findings: ReviewFinding[] = results.flatMap((r) => r.findings);
 
-  const resumed = start > 0;
-  // Global part numbers: a resumed pass continues the original numbering
-  // instead of restarting at "Part 1" (which would duplicate labels).
-  const partLabel = (localIdx: number) =>
-    count > 1 ? `Part ${start + localIdx + 1}` : "Part 1";
+  const resumed = skipSet.size > 0;
+  // Global part numbers: labels use each chunk's absolute index, so resumed
+  // passes continue the original numbering (no duplicate "Part 1"s).
   let summary = results
-    .map((r, i) => (count > 1 ? `${partLabel(i)}: ${r.summary}` : r.summary))
+    .map((r, i) =>
+      count > 1 ? `Part ${reviewedIndexes[i] + 1}: ${r.summary}` : r.summary
+    )
     .join(" ");
-  if (results.length < totalForClient) {
-    summary += ` [Partial review pass: ${results.length}/${totalForClient - start} parts completed.]`;
+  const doneTotal = skipSet.size + results.length;
+  if (doneTotal < totalForClient) {
+    summary += ` [Partial review pass: ${results.length} new / ${totalForClient - skipSet.size} pending — ${doneTotal}/${totalForClient} done so far.]`;
   }
   summary += notes.join(" ");
   if (truncated) {
     summary += " [Note: diff too large — later portions were not reviewed to stay within the free-tier token limit.]";
   }
   if (resumed) {
-    summary = ` (Resumed from part ${start + 1}) ` + summary;
+    summary = ` (Continued — reviewing previously-unreviewed parts only) ` + summary;
   }
 
-  // Tell the client where to resume the chunks-sized portion (skipping only
-  // ever happens among reviewed chunks — truncated tail is a separate note).
-  const out: ReviewResult = { summary, verdict: worst, findings };
-  if (results.length < totalForClient && failedIndexes.length > 0) {
+  const out: ReviewResult = {
+    summary,
+    verdict: worst,
+    findings,
+    reviewedIndexes,
+    totalChunks: totalForClient,
+  };
+  if (doneTotal < totalForClient && failedIndexes.length > 0) {
     out.resumeIndex = Math.min(...failedIndexes);
   }
 

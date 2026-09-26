@@ -18,4 +18,8 @@ export type ReviewResult = {
   findings: ReviewFinding[];
   /** Index of the chunk to resume from when a large diff was only partially reviewed (absent when complete). */
   resumeIndex?: number;
+  /** Chunk indexes successfully reviewed in THIS pass (client unions them across passes). */
+  reviewedIndexes?: number[];
+  /** Total number of chunks for the whole diff (so the client knows when coverage is complete). */
+  totalChunks?: number;
 };

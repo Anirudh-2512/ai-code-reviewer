@@ -13,6 +13,7 @@ export async function POST(req: Request) {
       prUrl?: string;
       diff?: string;
       resumeFrom?: number;
+      skipIndexes?: unknown;
     };
     const prUrl = body.prUrl?.trim();
     const pasted = body.diff?.trim();
@@ -59,6 +60,11 @@ export async function POST(req: Request) {
         typeof body.resumeFrom === "number" && Number.isFinite(body.resumeFrom)
           ? body.resumeFrom
           : 0,
+      skipIndexes: Array.isArray(body.skipIndexes)
+        ? (body.skipIndexes.filter(
+            (n): n is number => typeof n === "number" && Number.isInteger(n)
+          ) as number[])
+        : undefined,
     });
 
     return NextResponse.json({ source, title, review });

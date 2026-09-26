@@ -42,19 +42,28 @@ export function ReviewStudio() {
     setPayload(null);
     try {
       let merged: Payload | null = null;
-      let resume = 0;
+      let totalChunks = 0;
+      const reviewed: number[] = []; // chunk indexes successfully reviewed
       const maxPasses = 5;
       let unfinished = false;
       // Auto-resume: large diffs are reviewed in allotments under the free
-      // tier's token budget; keep fetching the remaining chunks and merge.
-      for (let pass = 0; (pass === 0 || resume > 0) && pass < maxPasses; pass++) {
+      // tier's token budget; each pass skips already-reviewed chunks.
+      for (
+        let pass = 0;
+        (pass === 0 || reviewed.length < totalChunks) && pass < maxPasses;
+        pass++
+      ) {
         // One retry per pass: a fully rate-limited pass (503) usually clears
         // within a minute as the free-tier token window resets.
         for (let attempt = 0; ; attempt++) {
           const res = await fetch("/api/review", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prUrl, diff, resumeFrom: resume }),
+            body: JSON.stringify({
+              prUrl,
+              diff,
+              skipIndexes: reviewed,
+            }),
           });
           const raw = await res.text();
           let data: {
@@ -86,6 +95,11 @@ export function ReviewStudio() {
           }
           if (!data.review || !data.source)
             throw new Error("Unexpected response from server.");
+          if (data.review.totalChunks)
+            totalChunks = data.review.totalChunks;
+          for (const idx of data.review.reviewedIndexes ?? []) {
+            if (!reviewed.includes(idx)) reviewed.push(idx);
+          }
         if (merged === null) {
           merged = {
             source: data.source,
@@ -104,13 +118,12 @@ export function ReviewStudio() {
         const next = data.review.resumeIndex;
         if (next != null && pass < maxPasses - 1) {
           setStage(
-            `Reviewed — automatically reviewing the remaining parts (pass ${pass + 2}/${maxPasses}). Findings below update as each pass completes.`
+            `Reviewed ${reviewed.length}/${totalChunks || "?"} parts — automatically reviewing the remaining parts (pass ${pass + 2}/${maxPasses}). Findings below update as each pass completes.`
           );
         }
         if (next != null && pass >= maxPasses - 1) {
           unfinished = true;
         }
-        resume = next != null ? next : 0;
         break;
         }
       }
@@ -123,7 +136,7 @@ export function ReviewStudio() {
       setStage(
         unfinished
           ? "Some parts remain unreviewed (free-tier limits) — press Run again to continue from where it stopped."
-          : null
+          : `Review complete — ${reviewed.length}/${totalChunks || "?"} parts reviewed.`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
@@ -159,6 +172,13 @@ export function ReviewStudio() {
       ],
       summary: `${stripNotes(prev.summary)} ${stripNotes(next.summary)}`,
       resumeIndex: next.resumeIndex,
+      reviewedIndexes: Array.from(
+        new Set([
+          ...(prev.reviewedIndexes ?? []),
+          ...(next.reviewedIndexes ?? []),
+        ])
+      ),
+      totalChunks: next.totalChunks ?? prev.totalChunks,
     };
   }
 
@@ -221,6 +241,12 @@ export function ReviewStudio() {
       {error ? (
         <p className="font-ui mt-6 text-sm text-[var(--danger)]" role="alert">
           {error}
+        </p>
+      ) : null}
+
+      {!loading && stage ? (
+        <p className="font-ui mt-4 text-xs text-[var(--gold)]" aria-live="polite">
+          {stage}
         </p>
       ) : null}
 
