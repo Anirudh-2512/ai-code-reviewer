@@ -15,8 +15,8 @@ const OUTPUT_RESERVE_TOKENS = 1_200;
 const SINGLE_SHOT_CHARS = Math.floor(
   (TPM_BUDGET - PROMPT_TOKENS - OUTPUT_RESERVE_TOKENS) * CHARS_PER_TOKEN
 );
-const MAX_CHUNK_CHARS = 15_000;
-const MAX_CHUNKS = 6;
+const MAX_CHUNK_CHARS = 9_000;
+const MAX_CHUNKS = 12;
 
 const VERDICT_RANK: Record<ReviewResult["verdict"], number> = {
   safe: 0,
