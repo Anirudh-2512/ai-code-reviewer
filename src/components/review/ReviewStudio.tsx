@@ -100,15 +100,21 @@ export function ReviewStudio() {
         }
         setPayload(merged);
         const next = data.review.resumeIndex;
-        if (next != null) {
+        if (next != null && pass < 2) {
           setStage(
-            `First parts reviewed — automatically reviewing the remaining parts (pass ${pass + 2}/3). Findings shown below update as each pass completes.`
+            `Reviewed — automatically reviewing the remaining parts (pass ${pass + 2}/3). Findings below update as each pass completes.`
           );
         }
         resume = next != null ? next : 0;
         break;
         }
       }
+      // Final pass done (or no more chunks): drop the resume marker so the
+      // results read as complete, and clear the progress stage.
+      if (merged) {
+        merged = { ...merged, review: { ...merged.review, resumeIndex: undefined } };
+      }
+      setPayload(merged);
       setStage(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
