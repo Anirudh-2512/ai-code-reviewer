@@ -2,7 +2,11 @@ import Groq from "groq-sdk";
 import { SYSTEM_PROMPT, COMPACT_PROMPT } from "./prompt";
 import type { ReviewFinding, ReviewResult } from "./types";
 
-const MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+const MODELS = [
+  "openai/gpt-oss-120b",
+  "qwen/qwen3.8-27b",
+  "openai/gpt-oss-20b",
+];
 
 // Free-tier Groq ("on_demand") enforces ~8000 tokens-per-minute for these models.
 // We size requests so each single call fits the budget, and split larger diffs
