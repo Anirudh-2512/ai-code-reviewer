@@ -155,20 +155,34 @@ async function reviewText(
 ): Promise<ReviewResult> {
   let lastError: unknown;
   for (const model of MODELS) {
-    try {
-      const raw = await chat(groq, model, user);
-      const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
-      return normalize(parsed);
-    } catch (err) {
-      lastError = err;
-      const message = err instanceof Error ? err.message : String(err);
-      // Try the next model on missing model OR rate limit (different models
-      // have independent TPM buckets on Groq).
-      if (
-        !message.includes("model_not_found") &&
-        !message.includes("rate_limit_exceeded")
-      ) {
-        throw err;
+    // Two attempts per model: JSON-mode generations occasionally fail
+    // validation transiently; a retry usually produces valid output.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const raw = await chat(groq, model, user);
+        const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
+        return normalize(parsed);
+      } catch (err) {
+        if (err instanceof SyntaxError || !(err instanceof Error)) {
+          // JSON.parse / extractJson failure — retryable, stay on this model.
+          lastError = err;
+          continue;
+        }
+        const message = err.message;
+        if (message.includes("json_validate_failed")) {
+          lastError = err;
+          continue;
+        }
+        // Try the next model on missing model OR rate limit (different models
+        // have independent TPM buckets on Groq). Anything else propagates.
+        if (
+          !message.includes("model_not_found") &&
+          !message.includes("rate_limit_exceeded")
+        ) {
+          throw err;
+        }
+        lastError = err;
+        break;
       }
     }
   }
