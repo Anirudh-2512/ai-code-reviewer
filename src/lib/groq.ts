@@ -1,5 +1,5 @@
 import Groq from "groq-sdk";
-import { SYSTEM_PROMPT } from "./prompt";
+import { SYSTEM_PROMPT, COMPACT_PROMPT } from "./prompt";
 import type { ReviewFinding, ReviewResult } from "./types";
 
 const MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
@@ -121,7 +121,8 @@ async function chat(
   groq: Groq,
   model: string,
   user: string,
-  deadline?: number
+  deadline?: number,
+  systemPrompt: string = SYSTEM_PROMPT
 ): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -134,7 +135,7 @@ async function chat(
         temperature: 0.1,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt },
           { role: "user", content: user },
         ],
       });
@@ -163,7 +164,8 @@ async function chat(
 async function reviewText(
   groq: Groq,
   user: string,
-  deadline?: number
+  deadline?: number,
+  systemPrompt: string = SYSTEM_PROMPT
 ): Promise<ReviewResult> {
   let lastError: unknown;
   for (const model of MODELS) {
@@ -174,7 +176,7 @@ async function reviewText(
         throw new Error("DEADLINE_EXCEEDED");
       }
       try {
-        const raw = await chat(groq, model, user, deadline);
+        const raw = await chat(groq, model, user, deadline, systemPrompt);
         const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
         return normalize(parsed);
       } catch (err) {
@@ -285,7 +287,8 @@ export async function reviewWithGroq(input: {
         await reviewText(
           groq,
           buildUserMessage(input, chunks[i], i + 1, count),
-          deadline
+          deadline,
+          COMPACT_PROMPT
         )
       );
     } catch (err) {
