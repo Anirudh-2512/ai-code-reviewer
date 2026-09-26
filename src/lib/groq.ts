@@ -403,11 +403,15 @@ export async function reviewWithGroq(input: {
   const findings: ReviewFinding[] = results.flatMap((r) => r.findings);
 
   const resumed = start > 0;
+  // Global part numbers: a resumed pass continues the original numbering
+  // instead of restarting at "Part 1" (which would duplicate labels).
+  const partLabel = (localIdx: number) =>
+    count > 1 ? `Part ${start + localIdx + 1}` : "Part 1";
   let summary = results
-    .map((r, i) => (count > 1 ? `Part ${i + 1}: ${r.summary}` : r.summary))
+    .map((r, i) => (count > 1 ? `${partLabel(i)}: ${r.summary}` : r.summary))
     .join(" ");
-  if (count > 1 && results.length < totalForClient) {
-    summary += ` [Partial review: ${results.length}/${totalForClient} parts completed.]`;
+  if (results.length < totalForClient) {
+    summary += ` [Partial review pass: ${results.length}/${totalForClient - start} parts completed.]`;
   }
   summary += notes.join(" ");
   if (truncated) {

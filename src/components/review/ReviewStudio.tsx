@@ -127,13 +127,28 @@ export function ReviewStudio() {
     const seen = new Set(
       prev.findings.map((f) => `${f.file ?? ""}:${f.line ?? ""}:${f.title}`)
     );
+    // A newer pass supersedes the previous pass's bookkeeping notes (partial
+    // counts, skip notices) — only part texts and fresh notes remain.
+    const stripNotes = (s: string) =>
+      s
+        .replace(/\s*\[Partial review[^.\]]*\.\]/g, " ")
+        .replace(/\s*Parts \d+-\d+ were skipped to stay within the server time limit\.\s*/g, " ")
+        .replace(/\s*Stopped early to return results within the server time limit\.\s*/g, " ")
+        .replace(/\s*\(Resumed from part \d+\)\s*/g, " ")
+        .replace(/ {2,}/g, " ")
+        .trim();
     return {
       verdict:
         VERDICT_RANK[next.verdict] > VERDICT_RANK[prev.verdict]
           ? next.verdict
           : prev.verdict,
-      findings: [...prev.findings, ...next.findings.filter((f) => !seen.has(`${f.file ?? ""}:${f.line ?? ""}:${f.title}`))],
-      summary: `${prev.summary.replace(/\s*\(Resumed from part \d+\)\s*/g, " ")} ${next.summary.replace(/\s*\(Resumed from part \d+\)\s*/g, " ")}`,
+      findings: [
+        ...prev.findings,
+        ...next.findings.filter(
+          (f) => !seen.has(`${f.file ?? ""}:${f.line ?? ""}:${f.title}`)
+        ),
+      ],
+      summary: `${stripNotes(prev.summary)} ${stripNotes(next.summary)}`,
       resumeIndex: next.resumeIndex,
     };
   }
