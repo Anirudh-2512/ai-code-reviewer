@@ -19,6 +19,7 @@ export function ReviewStudio() {
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [payload, setPayload] = useState<Payload | null>(null);
+  const [stage, setStage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading) return;
@@ -37,6 +38,7 @@ export function ReviewStudio() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setStage(null);
     setPayload(null);
     try {
       let merged: Payload | null = null;
@@ -85,8 +87,14 @@ export function ReviewStudio() {
         }
         setPayload(merged);
         const next = data.review.resumeIndex;
+        if (next != null) {
+          setStage(
+            `First parts reviewed — automatically reviewing the remaining parts (pass ${pass + 2}/3). Findings shown below update as each pass completes.`
+          );
+        }
         resume = next != null ? next : 0;
       }
+      setStage(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
     } finally {
@@ -151,10 +159,18 @@ export function ReviewStudio() {
       </form>
 
       {loading && elapsed > 20 ? (
-        <p className="font-ui mt-3 text-xs text-[var(--muted)]" aria-live="polite">
-          Large PRs are split into parts and rate-limited on Groq&apos;s free tier —
-          this can take 2–5 minutes. Keeping the tab open is safe; results appear here when done.
-        </p>
+        <>
+          {stage ? (
+            <p className="font-ui mt-3 text-xs text-[var(--gold)]" aria-live="polite">
+              {stage}
+            </p>
+          ) : null}
+          <p className="font-ui text-xs text-[var(--muted)]" aria-live="polite">
+            Large PRs are split into parts and rate-limited on Groq&apos;s free
+            tier — this can take 2–8 minutes total. Keeping the tab open is
+            safe; results appear below as each part completes.
+          </p>
+        </>
       ) : null}
 
       {error ? (
