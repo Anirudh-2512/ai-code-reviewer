@@ -116,7 +116,9 @@ async function chatGemini(
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("Gemini fallback unavailable.");
   if (deadlineHit(deadline)) throw new Error("DEADLINE_EXCEEDED");
-  const model = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+  // gemini-flash-lite-latest: only newer-gen models are available to newly
+  // created Google AI keys; flash-lite has the loosest capacity constraints.
+  const model = process.env.GEMINI_MODEL ?? "gemini-flash-lite-latest";
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
