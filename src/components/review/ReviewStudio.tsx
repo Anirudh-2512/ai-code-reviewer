@@ -53,18 +53,34 @@ export function ReviewStudio() {
         (pass === 0 || reviewed.length < totalChunks) && pass < maxPasses;
         pass++
       ) {
-        // One retry per pass: a fully rate-limited pass (503) usually clears
-        // within a minute as the free-tier token window resets.
+        // One retry per pass on network drop / reset + one per rate-limit.
+        // Mobile browsers abort long fetches when the radio idles (screen
+        // off, tower switch, data saver) — those surface as "Failed to
+        // fetch" and must not kill a review that already has partial data.
         for (let attempt = 0; ; attempt++) {
-          const res = await fetch("/api/review", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prUrl,
-              diff,
-              skipIndexes: reviewed,
-            }),
-          });
+          let res: Response;
+          try {
+            res = await fetch("/api/review", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                prUrl,
+                diff,
+                skipIndexes: reviewed,
+              }),
+            });
+          } catch {
+            if (attempt === 0) {
+              setStage(
+                "Network dropped (common on mobile data) — reconnecting and continuing the review…"
+              );
+              await new Promise((r) => setTimeout(r, 6_000));
+              continue;
+            }
+            throw new Error(
+              "Network connection lost mid-review. Press Run again — the completed parts are remembered per chunk, so it continues where it stopped."
+            );
+          }
           const raw = await res.text();
           let data: {
             error?: string;
