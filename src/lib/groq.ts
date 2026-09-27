@@ -106,6 +106,45 @@ function normalize(parsed: Partial<ReviewResult>): ReviewResult {
   };
 }
 
+// Google Gemini fallback — independent free tier (250 req/day) that covers
+// Groq when its org-wide token budget (TPM or TPD) is exhausted.
+async function chatGemini(
+  user: string,
+  systemPrompt: string,
+  deadline?: number
+): Promise<string> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("Gemini fallback unavailable.");
+  if (deadlineHit(deadline)) throw new Error("DEADLINE_EXCEEDED");
+  const model = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: user }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+          maxOutputTokens: 4_096,
+        },
+      }),
+      signal: AbortSignal.timeout(40_000),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  }
+  const json = (await res.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+  };
+  return (
+    json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? ""
+  );
+}
+
 function getRateLimitResetMs(err: unknown): number {
   // Groq 429 bodies can carry an explicit cooldown ("try again in 10m16.032s")
   // for both TPM and daily (TPD) windows — prefer it over header estimates.
@@ -257,6 +296,18 @@ async function reviewText(
         break;
       }
     }
+  }
+  // Groq exhausted (rate limits on every model) — last line of defense:
+  // Gemini's independent free tier covers the remaining token budget.
+  try {
+    const raw = await chatGemini(user, systemPrompt, deadline);
+    const parsed = JSON.parse(extractJson(raw)) as Partial<ReviewResult>;
+    console.error(`[groq] part recovered via Gemini fallback`);
+    return normalize(parsed);
+  } catch (err) {
+    console.error(
+      `[groq] Gemini fallback failed: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`
+    );
   }
   throw lastError instanceof Error
     ? lastError
